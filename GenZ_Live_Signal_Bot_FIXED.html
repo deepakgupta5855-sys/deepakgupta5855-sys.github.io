@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Gen-Z Live Signal Bot</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#071a3a;color:#fff;font-family:Arial,sans-serif}
+.wrap{max-width:720px;margin:auto;padding:18px}.head{display:flex;justify-content:space-between;align-items:center}
+h1{margin:5px 0;font-size:28px}.online{font-weight:bold}.card{background:#0d2b5c;border:1px solid #3565a5;border-radius:22px;padding:20px;margin-top:16px}
+label{display:block;color:#b7c8e3;margin:12px 0 7px;font-size:14px}
+input,select,button{width:100%;padding:15px;border-radius:13px;border:1px solid #4772aa;background:#12386c;color:#fff;font-size:16px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}button{background:linear-gradient(90deg,#4856ff,#cf00ff);border:0;font-weight:bold;margin-top:10px}
+.price{font-size:40px;font-weight:800;margin:18px 0}.signal{text-align:center;font-size:34px;font-weight:900;padding:20px;background:#071a39;border-radius:17px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.box{background:#123566;padding:13px;border-radius:13px}
+.muted{color:#aebfda;font-size:13px}.bar{height:12px;background:#1b3c6b;border-radius:20px;overflow:hidden;margin-top:7px}.fill{height:100%;width:0;background:#7070ff}
+#status{margin-top:12px;line-height:1.45}.ok{color:#57efb0}.err{color:#ff6f7d}.warn{color:#ffd166}
+.small{font-size:12px;color:#94abd0;line-height:1.45}
+</style></head>
+<body><div class="wrap">
+<div class="head"><h1>Gen-Z Live Signal Bot</h1><div id="dot" class="err">● OFFLINE</div></div>
+
+<div class="card">
+<label>MARKET</label>
+<select id="symbol"><option>EUR/USD</option><option>GBP/USD</option><option>USD/JPY</option><option>AUD/USD</option></select>
+
+<label>TIMEFRAME</label>
+<select id="tf"><option value="1min">1 MIN</option><option value="5min">5 MIN</option></select>
+
+<label>TWELVE DATA API KEY</label>
+<input id="key" type="password" placeholder="Paste your API key here" autocomplete="off">
+
+<div class="row">
+<button id="connect">CONNECT LIVE DATA</button>
+<button id="test">TEST API</button>
+</div>
+
+<div id="status" class="warn">Enter your API key and press TEST API first.</div>
+</div>
+
+<div class="card">
+<div class="muted">LIVE PRICE</div><div id="price" class="price">--</div>
+<div id="signal" class="signal">WAIT</div>
+<div class="grid">
+<div class="box"><div class="muted">Confidence</div><b id="conf">--%</b></div>
+<div class="box"><div class="muted">Trend</div><b id="trend">--</b></div>
+<div class="box"><div class="muted">EMA 9 / 21</div><b id="ema">-- / --</b></div>
+<div class="box"><div class="muted">RSI 14</div><b id="rsi">--</b></div>
+</div>
+<div class="muted" style="margin-top:16px">CONFIDENCE</div><div class="bar"><div id="fill" class="fill"></div></div>
+<p id="reason" class="muted">No market data yet.</p>
+<p class="small">Signal only. This page does not place trades. Never share your API key in chat.</p>
+</div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+let timer=null,lastSignal=null;
+
+function ema(a,n){let k=2/(n+1),e=a.slice(0,n).reduce((x,y)=>x+y,0)/n;for(let i=n;i<a.length;i++)e=a[i]*k+e*(1-k);return e}
+function rsi(a,n=14){let g=0,l=0;for(let i=a.length-n;i<a.length;i++){let d=a[i]-a[i-1];if(d>0)g+=d;else l-=d}return l===0?100:100-100/(1+g/l)}
+
+function setStatus(msg,cls){$("status").textContent=msg;$("status").className=cls||""}
+
+async function requestData(){
+ const key=$("key").value.trim(), symbol=$("symbol").value, interval=$("tf").value;
+ if(!key){setStatus("❌ API key is empty. Paste your Twelve Data key first.","err");return null}
+ const url="https://api.twelvedata.com/time_series?symbol="+encodeURIComponent(symbol)+"&interval="+interval+"&outputsize=100&order=ASC&apikey="+encodeURIComponent(key);
+ setStatus("Connecting to Twelve Data...","warn");
+ try{
+   const response=await fetch(url,{method:"GET",cache:"no-store"});
+   if(!response.ok) throw new Error("HTTP "+response.status+" "+response.statusText);
+   const data=await response.json();
+   if(data.status==="error") throw new Error(data.message||"Twelve Data returned an error");
+   if(!Array.isArray(data.values)||data.values.length<25) throw new Error("Not enough candle data returned");
+   return data;
+ }catch(e){
+   let msg=e.message||String(e);
+   if(msg==="Failed to fetch") msg="Browser could not reach Twelve Data (network/CORS/security block). Try opening this page as a normal GitHub Pages website, not inside the ChatGPT file preview.";
+   setStatus("❌ "+msg,"err");$("dot").textContent="● OFFLINE";$("dot").className="err";return null;
+ }
+}
+
+function analyze(data){
+ const a=data.values.map(x=>+x.close), symbol=$("symbol").value;
+ const e9=ema(a,9),e21=ema(a,21),rr=rsi(a),mom=a.at(-1)-a.at(-4);
+ const buy=e9>e21&&mom>0&&rr>=52&&rr<=70;
+ const sell=e9<e21&&mom<0&&rr<=48&&rr>=30;
+ const sig=buy?"BUY":sell?"SELL":"WAIT";
+ const conf=sig==="WAIT"?45:Math.min(95,55+Math.min(20,Math.abs(rr-50)*1.1)+Math.min(20,Math.abs((e9-e21)/a.at(-1))*100000));
+ $("price").textContent=a.at(-1).toFixed(symbol.includes("JPY")?3:5);
+ $("signal").textContent=sig;$("conf").textContent=Math.round(conf)+"%";$("fill").style.width=Math.round(conf)+"%";
+ $("trend").textContent=e9>e21?"BULLISH":e9<e21?"BEARISH":"FLAT";
+ $("ema").textContent=e9.toFixed(5)+" / "+e21.toFixed(5);$("rsi").textContent=rr.toFixed(1);
+ $("reason").textContent=sig==="BUY"?"EMA 9 > EMA 21, positive momentum and supportive RSI.":sig==="SELL"?"EMA 9 < EMA 21, negative momentum and supportive RSI.":"Conditions are mixed — WAIT for confirmation.";
+ $("dot").textContent="● ONLINE";$("dot").className="ok";
+ setStatus("🟢 LIVE — updated "+new Date().toLocaleTimeString(),"ok");
+ lastSignal=sig;
+}
+
+async function run(){
+ const data=await requestData();if(data)analyze(data);
+}
+$("test").onclick=run;
+$("connect").onclick=()=>{clearInterval(timer);run();timer=setInterval(run,60000)};
+</script>
+</body></html>
